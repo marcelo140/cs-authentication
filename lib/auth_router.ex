@@ -9,12 +9,17 @@ defmodule AuthRouter do
     signing_salt: Application.get_env(:auth, :signing_salt)
 
   plug :match
+
   plug :fetch_session
+
+  plug AuthAuthenticator
+
   plug AuthAuthorizator
+
   plug :dispatch
 
   get "/" do
-    name = case conn |> get_session("id") |> AuthSession.from_session do
+    name = case conn.assigns[:user] do
       nil -> "?? Wait, who the heck are you?"
       name -> name
     end
@@ -27,6 +32,12 @@ defmodule AuthRouter do
 
     conn 
     |> put_session("id", session_id)
+    |> redirect_to("/")
+  end
+
+  get "/jwt/:name" do
+    conn 
+    |> put_resp_cookie("jwt", AuthJWT.generate_jwt(name))
     |> redirect_to("/")
   end
 

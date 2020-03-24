@@ -6,12 +6,9 @@ defmodule AuthAuthorizator do
   end
 
   def call(%Plug.Conn{private: %{authenticate: true}} = conn, _opts) do
-    session = conn |> get_session("id") |> AuthSession.from_session
-
-    case is_nil session do
-      true -> 
+    if is_nil(conn.assigns[:user]) do
         conn |> deny_authorization
-      false -> 
+    else
         conn
     end
   end
