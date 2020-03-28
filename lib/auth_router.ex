@@ -27,7 +27,7 @@ defmodule AuthRouter do
     conn |> send_resp(200, "Hello #{name}")
   end
 
-  get "/login/:name" do
+  post "/login/:name" do
     session_id = AuthSession.create_session(name)    
 
     conn 
@@ -35,18 +35,18 @@ defmodule AuthRouter do
     |> redirect_to("/")
   end
 
-  get "/jwt/:name" do
-    conn 
-    |> put_resp_cookie("jwt", AuthJWT.generate_jwt(name))
-    |> redirect_to("/")
-  end
-
-  get "/logout/" do
+  post "/logout/" do
     conn 
     |> get_session("id")
     |> AuthSession.destroy_session()
 
     conn |> clear_session |> redirect_to("/")
+  end
+
+  get "/jwt/:name" do
+    conn 
+    |> put_resp_cookie("jwt", AuthJWT.generate_jwt(name))
+    |> redirect_to("/")
   end
 
   get "/admin", private: %{authenticate: true} do
