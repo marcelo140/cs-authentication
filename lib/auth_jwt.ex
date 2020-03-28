@@ -20,12 +20,15 @@ defmodule AuthJWT do
   end
 
   def verify(jwt) do
-    {user, timestamp} = verify_signature(jwt)
-
-    if not is_expired(timestamp) do
-      user
-    else
-      nil
+    case verify_signature(jwt) do
+        {user, timestamp} -> 
+          if timestamp < DateTime.utc_now |> DateTime.to_unix do
+            user
+          else
+            nil
+          end
+        _ ->
+          nil
     end
   end
 
@@ -43,8 +46,5 @@ defmodule AuthJWT do
   defp next_minute_timestamp do
     DateTime.utc_now |> DateTime.add(60) |> DateTime.to_unix
   end
-
-  defp is_expired(timestamp) do
-    timestamp < DateTime.utc_now |> DateTime.to_unix
-  end
 end
+
