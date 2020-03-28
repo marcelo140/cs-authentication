@@ -1,124 +1,149 @@
 # Auth
 
-## todo
+This is a toy project to understand some authorization concepts and raise further questions for myself. Two different authorization methods are implemented: sessions and JWTs. No authentication is done.
 
-implement expiration
+## Authorization
 
-This was done for the sole purpose of understanding authentication and comparing cookies with JWTs.
+### Sessions
 
-# Some notes from what I understand right now:
+Sessions are a means for the user to prove his identity with a server without having to authenticate all the time. The user authenticates once and the server provides him with a session ID. Everytime the user wants to reach the server he sends him his session ID to identify himself, avoiding the hassle of authentication. Note that the server needs to keep a mapping from sessions to users, sessionID -> user. When the user logs in we add the entry to the map, when the user logs out we remove the entry.
 
-- cookies are stateful, they require the server to save the match between the sessionId and the user
-- JWTs are stateless, you can simply validate the JWT and accept the user claims
-- JWTs are more CPU intensive since they need to be decrypted
-- JWTs are supposed to be issued for single time use or a very short amount of time, how do they keep the client from re-authenticating all the time?
-- If a sessionId gets compromised, you can remove it from the DB, denying the intruder the chance to abuse it.
-- If a JWT is compromised, there's no way to invalidate it! Your only chance is to have a blacklist of JWTs that should be denied while they don't expire. This goes against the only benefit I found so far for JWTs: being stateless and thus avoiding round-trips to the database.
+The sessionID is usually saved in the browser local storage to be fetched between visits. The session should be signed to guarantee it was issued by the server and not created by a malicious user pretending to be someone else.
 
-- Unlike cookies, they're can be shared cross-domain. This allow them to be used for single sign-on.
+#### Elixir implementation
 
-# Notes about JWT:
+1. When the connection passes through Plug.Session, a lambda function that fetches the session is stored in it. Plug.Session requires a secret\_key\_base and a signing\_salt to be defined. These are used to generate a secret for signing. Encryption is also an option but I decided to stick to signing.
 
-- can be done with public/private key or HMAC. wtf is HMAC?
+2. Once we fetch the session in the connection the following happens
 
-- A JWT can take one of two forms:
+    2.1. Plug.Conn parses the cookies in the request headers
 
-  - JSON Web Signature (JWS) -> signed (can check for integrity ; not secure to share private information)
-  - JSON Web Encryption (JWE) -> encrypted (can protect private information)
+    2.2. Calls the lambda function that was previously stored which calls Plug.Session
 
-- with public/private key, a signed token certifies that it was signed by the party holding the private key
-- it is widely used for authorization, specifically for Single Sign On because it can be user across different domains (cookies can't)
+    2.2. Plug.Session fetches the session cookie session that was parsed in 2.1 and calls Plug.Session.Store for it to verify the session integrity
 
-HMAC use octet keys
-! What are octet keys?
+    2.4. The cookie store generates the secret key using the secret\_key\_base and signing\_salt and verifies the session, retrieving its contents
 
-## Form
+    2.5. The session is set in :plug_session
 
-- header: JSON Object Signing and Encryption (JOSE)
-- signature = algorithm(bheader.bpayload, secret)
-- token: base64(header).base64(payload).signature
+    2.6. The lambda function in the connection is replaced with :done. Further calls will return immediately, as the session was already fetched. This is a case lazy evaluation.
 
-easier to state horizontally (?) -> it's stateless (if it is), so it is not dependent on the database
-blogger claims redis + sessions is easier to scale up
+The algorithm used to sign and verify the session is HS256. For this reason, when using JWTs I decided to also stick to HS256.
 
-you don't control the expiration mechanism (as in JWT)
-data in the JWT claims can go become outdated (as in caches)
+> How are the secret\_key\_base and the signing\_salt used to generate the key?
 
-> JWTs represent a set of claims as a JSON object that is encoded in a JWS and/or JWE structure.
+### JWK, JWA, JWS, JWE and JWTs
 
-what is a JWS / JWE?
+I found the concept of JWTs quite recently while working on another project. I already used Single Sign On before, but had no idea of how it actually worked. After workign with it in the this new project my grasp of it was still limited: the user sends the JWT and the server uses the JWK to verify its authenticity. I didn't really understand its inner workings and where it differred from sessions. I didn't even understood how signing actually worked. This is why I decided to start this toy project.
 
-> The contents of the JOSE Header describe the cryptographic operations applied to the JWT Claims Set.
+At first I was quite overwhelmed with all the acronyms. I was only interested in learning JWKs and JWTs and I'd never heard about the others so where were all coming from? After reading RFCs for JWK, JWS, JWT and skimming JWA for reference, this is what I came up with. Note that there are way more (optional) parameters than the ones I present.
 
-Never heard about this JOSE header. where does it fit?
+#### JWK
 
-# Session
+A **JSON Web Key** represents a single cryptographic key or a set of cryptographic keys. The cryptographic algorithms that are supported by the JWK are defined by the JSON Web Algorithms specification. These keys are used in the JSON Web Signature and JSON Web Encryption specifications.
 
-When passing through Plug.Session:
+```json
+{
+    "kty": "oct",
+    "v": "741c8ce2f636bb9e2"
+}
+```
 
-- put {:plug_session_fetch, fetch_session(config)} into conn.private
+The only mandatory parameter in the JWK is the key type **kty** that states the algorithm family used by the key. Other parameters are then required depending on the chosen algorithm family. For the key type `oct`, the JWA standard defines the key value parameter **v** as the base64url representation of the key. Many other parameters are described by the specification.
 
-When fetching the session:
+> Do the oct algorithm family have any interesting properties? Is it simply binary? Good question. Didn't take a look yet.
 
-1. Plug.Conn parses the request cookies headers
-2. Gets the function in :plug_session_fetch [fetch_session(config)] and applies it to the connection
-3. Plug.Session picks the session using the key set in the configuration and passes it to the session store for it to decode
-4. The cookie store verifies/decrypts the session
-5. The session is set in :plug_session
-6. The :plug_session_fetch is replaced with :done to avoid repeating the work (fetching the session is lazy)
+#### JWS
 
-# Signing
+A **JSON Web Signature** represents content that was secured through digital signatures (e.g. ECDSA algorithm) or Message Authentication Codes (e.g. HMAC algorithm). This allow us to perform integrity and possibly authorization checks on the message. The following is an example of a JWS in it's compact form.
 
-signing_salt
-secret_key_base
-opts(iterations, ...)
-----> all used to generate secret key
-! what happens here to generate the key?
+```
+eyJhbGciOiJIUzI1NiJ9Cg==.TyBlc2NvbGhpZG8gw6kgbmFibw==.40d1b895fcdae516ed19f70ae7c4ec862bc7a2d5b0963952eab4dda8031c030f
+```
 
-cookie X.Y.Z where
-X = b64(protected) --> HS256 is default
-Y = b64(payload)
-Z = b64(signature)
+What information can we take from this? If we split it by the dots, we see three different parts. These are (1) the JWS Header in base64url representation (2) the payload in base64url representation (3) the signature obtained from signing the first two parts.
 
-`if hmac(:sha256, key, X.Y) = Z, do: payload`
+So lets start decoding the message.
 
-! how does hmac use the hashing algorithm to do its thing?
+```
+> echo -n "eyJhbGciOiJIUzI1NiJ9Cg==" | base64 -d
+{"alg":"HS256"}
+```
 
-! if it uses a secret, why is it different than encrypting?
+The JWS Header tells us that the algorithm used to sign the message was `HS256` i.e. HMAC with the hash function SHA-256. What about the payload?
 
-    - the message is just encoded in base64, not hidden in any way
+```
+> echo -n "TyBlc2NvbGhpZG8gw6kgbmFibw==" | base64 -d
+O Escolhido é nabo
+```
 
-what properties do encryption algorithms have that signing don't if you still require a secret to sign/verify?
+Ok, clearly messed up. How do we confirm that someone tampered with the message? We simply use the algorithm described in the JWS Header to compute the Message Authentication Code of the first two parts and check if it's the same signature we received. Lets try.
+
+As we saw, the algorithm used is HS256. This algorithm requires a key that must be kept secret so that a 3rd party can't sign messages. The key used to sign this message was the one in the JWK example, so lets compute the MAC with it and see if it the signatures match.
+
+```
+> echo -n "eyJhbGciOiJIUzI1NiJ9Cg==.TyBlc2NvbGhpZG8gw6kgbmFibw==" | hmac256 "741c8ce2f636bb9e2"
+d661582b2b5107d84aa4503a75cece9590edfa26ca4a87e6265232d13aec26ed
+```
+
+The signatures don't match... This means someone tampered with the message. Note that the payload wasn't encrypted, we just had to decode the message. If we wanted to send private information in the payload, we would have to rely on JSON Web Encryption. I had no interest interest in JWEs so I didn't look anything about it.
+
+#### JWT
+
+Only JWTs are missing now... JWTs are a way to represent claims between two-parties in a compact and url-safe manner. These claims are JSON object that are encoded in base64url to be used as JWS payloads. 
+
+```json
+{
+    "iss": "AuthApp",
+    "sub": "Escolhido",
+    "exp": 1585259296
+}
+```
+This is an example of a claim set. The issuer claim **iss** identifies the party that issued the JWT, in this case `AuthApp`. The subject claim **sub** identifies the subject we're making claims about. The expiration time claim **exp** identifies the time on after which the JWT must not be accepted. 
+
+When a user authenticates himself we can issue him a JWT like this. He can then use it to prove his identity without having to authenticate every time. Once the JWT expires, the user will have to authenticate again and we provide him with a new JWT.
+
+### What did I learn here?
+
+Sessions are stateful, they require the server to save the mapping between the sessionId and the user. Everytime we receive a request we'll have to hit the database for the session. This has the potential to become a bottleneck in a large application. You may require a service on its own dedicated to handle sessions which will be adding complexity and subject to potential falures.
+
+JWTs are stateless, as long as you have the key you'll be able to verify the JWT and validate the user claims. Your infrastucture will be simpler and more resilient and you may be able to save some latency.
+
+> It would be interesting to try to force these problems to emerge (even if they don't) on a toy app.
+
+On the other hand, with sessions if a user session ever gets compromised we simply need to remove it to deny access to potential malicious user. JWTs, however, remain valid until its expiration time. One possible way to deny access to compromised JWTs would be to keep a blacklist of JWTs, but that would mean we would have to keep state, defeating the previous point. Another possible way would be to refresh the secret key used to sign and validate the JWTs, rendering all previously issued JWTs as invalid. This doesn't seem feasible in most applications.
+
+> JWTs are also usually used to perform cross-domain authentication through Single Sign On. It would be interesting to take a look at OAuth or OpenID.
 
 ## HMAC
 
-SHA-2: - md5-like structure; - merkle-damgard structure -> susceptible to length extension attacks - one-way compression function; - davies-meyer structure
+HMAC is mechanism for message authentication using cryptographic hash functions. It can be used with any iterative hash function in combination with a secret key. Examples of iterative hash functions are md5, SHA-1, SHA2 and SHA-3. Both md5 and SHA-1 are considered unsecure for cryptographic use.
 
-SHA-3: Keccak family
+> How do iterative hash functions work? And how do non-iterative hash functions work? Might be nice to check this.
 
-sha-256 operates over 512-bit blocks (32 bytes). Its output is usually represented in hexadecimal and thus have 64 digits.
+What got me to searching about HMAC was a simple question: what properties does it have that can't be obtained just with the hash function and the secret? What is it adding? 
 
-As a consequence (of what) the algorithm provides better immunity against length extension attacks (what are these atacks?)
+If we consider a generic hash-function H, a secret S and a message M, HMAC can be computed as
+```
+H(K || H(K || message))
+```
+where || denotes concatenation. Note that I'm omitting details like key size and key padding.
 
-there seems to be a difference between digitally signing and MACing
+So why can't we simply `H(K || message)`? Apparently this would make us vulnerable to a length-extension attack. SHA-256 takes a message as input and uses this input to transform its internal state. When the input ends, it outputs its internal state as the hash digest. Thus, if we wish to extend the original message and generate a valid MAC that would be accepted by the server, we simply needed to use the previous digest as the initial internal state for SHA-256 and process our additional input, without even knowing the original secret key.
 
-## Differences between digital signatures and MAC
+There is an addional caveat here. SHA-256 breaks the input into multiple 512 bits blocks. If the last block is smaller than 512 bits, it will be padded to fit a 512 bits block. So SHA-256 will actually be hashing `K || message || padding`. Since the padding was used to calculate our initial digest, we need to know how long it is to replicate it in our extended message. Since we know the message's length, to calculate the length of the padding we just need to discover the secret's length which can be done through brute-force. Our extended message would look like `original_message || padding || our_message`.
 
-- In the case of MACs, the MAC key needs to be in the hands of everyone who needs to perform integrity computation and checking. As such, MAC only provide origination if there are only two parties holding the key and one of them is aware that it didn't sign the key.
+HMAC avoid this by hashing the output of `H(K || message)` again, making it impossible to extend. Both md5, SHA-1 and SHA-2 are vulnerable to this attack because they are all based on Merkle-Damgard constructions. SHA-3, oh the other had, is based on a Keccac cryptographic sponge which is not vulnerable to this attack. In the case of SHA-3, H(K || message) would be safe against length-extension attacks.
 
-! How doe JWS provide authentication? And how does it provide integrity without sharing the key?
-because it can use asymetric algorithms
+> Nope, I don't know anything about Merkle-Damgard constructions or Keccac sponges. That's something to explore in the future.
 
-JWS Format
+## Base64
 
-- JOSE header
-- JWS payload
-- JWS signature
+This one is actually shameful. One of these nights I was thinking to myself "Base64 sure is used in a lot of places... How does this encoding actually work??". Wait. It's called base64. Could it really be just another base like binary, decimal and hexadecimal?
 
-# Notes about this elixir implementation:
+Humm, base16 has 16 different digits and it take 4 bits to represent each digit. Then base64 with its 64 characters would take 6 bits to represent. A byte has 8 bits though, so how many digits would it take to make a multiple of 8? 4 digits. You need 4 base64 digits, taking 24 bits, to represent 3 bytes of information. What if the binary string we want to represent isn't a multiple of 4 though? Ohhh, that's what the padding is for. Duh. That's why you never have more than 3 equal signs (=) in a base64.
 
-- The session store requires the connection to have a secret_key_base. What is its purpose?
-- The session store requires the connection to have a signing_salt. What is its purpose?
-- Why does it need both a secret_key_base and a signing_salt?
+I still had another question though. The alphabet has 26 letters. So uppercase letters + lowercase letters + 10 digits = 62 characters. What are the other 2 characters used in base64. Turns out it's "/" and "+". But since these characters have a special meaning in URLs there's also base64url that uses "-" and "\_" intead to be url-safe.
 
-TO GENEREATE THEY SECRET KEY! HOW DOES THE KEY GENERATOR WORK?
+This sure took me a lot of years to realize.
+
